@@ -52,17 +52,32 @@ void setup() {
   }
   
   Serial.begin(9600);
-  Serial2.begin(9600);
+  Serial3.begin(9600);
 }
 
 void loop() {
+  int initDegrees;
   analogWrite(Motor_L_pwm_pin, 0);
   analogWrite(Motor_R_pwm_pin, 0);
-  if (Serial2.available() > 0) {
-    String message = Serial2.readStringUntil('\n');
+  Wire.beginTransmission(CMPS14_address);    
+  Wire.write(0x02);
+  Wire.endTransmission(false);
+  Wire.requestFrom(CMPS14_address, 2, true); 
+  if (Wire.available() >= 2) { 
+    byte highByte = Wire.read();
+    byte lowByte = Wire.read();
+    int heading = (highByte << 8) + lowByte;
+    initDegrees = (heading / 10 + offset) % 360; 
+  }
+  String lid = "Lid="+String(wallDistance);
+  String com = "Com="+String(initDegrees);
+  Serial3.println(lid);
+  delay(500);
+  Serial3.println(com);
+  if (Serial3.available() > 0) {
+    String message = Serial3.readStringUntil('\n');
     Serial.println("Received from ESP: ");
     Serial.println(message);
-    Serial2.println(24);
   }
   if (Serial.available() > 0) {
     String message = Serial.readStringUntil('\n');
