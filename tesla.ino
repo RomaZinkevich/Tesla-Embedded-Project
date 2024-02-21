@@ -50,28 +50,40 @@ void setup() {
     Serial.println("Device did not acknowledge! Freezing.");
     while(1);
   }
-
+  
   Serial.begin(9600);
+  Serial2.begin(9600);
 }
 
 void loop() {
   analogWrite(Motor_L_pwm_pin, 0);
   analogWrite(Motor_R_pwm_pin, 0);
+  if (Serial2.available() > 0) {
+    String message = Serial2.readStringUntil('\n');
+    Serial.println("Received from ESP: ");
+    Serial.println(message);
+    Serial2.println(24);
+  }
+  if (Serial.available() > 0) {
+    String message = Serial.readStringUntil('\n');
+    Serial.println("Received from Serial Monitor: ");
+    Serial.println(message);
+  }
   webMode();
   printData();//Printing all required data to LCD
 }
 
 void printData(){
   float readData;
-  for (int i=1; i<3; i++){
-    readData= EEPROM.read(i);
-    if (i==2)
-      Serial.print("Wood: ");
-    else
-      Serial.print("Lid: ");
-    Serial.print(String(readData/1000, 5)); 
-    Serial.println();
-  }
+  // for (int i=1; i<3; i++){
+  //   readData= EEPROM.read(i);
+  //   if (i==2)
+  //     Serial.print("Wood: ");
+  //   else
+  //     Serial.print("Lid: ");
+  //   Serial.print(String(readData/1000, 5)); 
+  //   Serial.println();
+  // }
   lcd.setCursor(0,0);
   printDistance();
   printDriven();
@@ -101,9 +113,11 @@ void printMeasures(){
   lcd.setCursor(0,2);
   lcd.print("Volume:");
   lcd.print(volume);
+  lcd.print(" m^3");
   lcd.setCursor(0,3);
   lcd.print("Area:");
   lcd.print(area);
+  lcd.print(" m^2");
 }
 
 void webMode(){//Mode when car can be driven from webpage
@@ -388,10 +402,27 @@ void turn(int encoderValue, int extraDegrees) {//"Turn" command
 
 void drive(int encoderValue, int distance) {//"Move" command
   int left, right;
-  int initPulsesDist, pulsesDist=0;
+  int initPulsesDist, pulsesDist=0, initDegrees, degrees, heading;
   float initDistance = wallDistance;
   float finDistance = initDistance-distance;
   totaldistance+=distance;
+
+  Wire.beginTransmission(CMPS14_address);    
+  Wire.write(0x02);
+  Wire.endTransmission(false);
+  Wire.requestFrom(CMPS14_address, 2, true); 
+  if (Wire.available() >= 2) { 
+    byte highByte = Wire.read();
+    byte lowByte = Wire.read();
+    heading = (highByte << 8) + lowByte;
+    initDegrees = (heading / 10 + offset) % 360; 
+  }
+
+  Serial.println("Init Degrees:");
+  Serial.print(initDegrees);
+  Serial.println();
+
+
   //Determines direction according to negative or positive value of "distance"
   if (distance < 0) {
     left = 1;
@@ -407,8 +438,35 @@ void drive(int encoderValue, int distance) {//"Move" command
   analogWrite(Motor_R_pwm_pin, 130);
 
   while ((wallDistance != finDistance) && (wallDistance != finDistance+1) && (wallDistance != finDistance-1)){
-    Serial.println(finDistance);
-    printData();
+    Wire.beginTransmission(CMPS14_address);    
+    Wire.write(0x02);
+    Wire.endTransmission(false);
+    Wire.requestFrom(CMPS14_address, 2, true); 
+    if (Wire.available() >= 2) { 
+      digitalWrite(Motor_R_dir_pin, right);
+      digitalWrite(Motor_L_dir_pin, left);
+      analogWrite(Motor_L_pwm_pin, 130);
+      analogWrite(Motor_R_pwm_pin, 130);
+      byte highByte = Wire.read();
+      byte lowByte = Wire.read();
+      heading = (highByte << 8) + lowByte;
+      degrees = (heading / 10 + offset) % 360; 
+      Serial.println("Degrees: ");
+      Serial.print(degrees);
+      Serial.println();
+      Serial.println("Init Degrees: ");
+      Serial.print(initDegrees);
+      Serial.println();
+      if (abs(degrees-initDegrees)>10){
+        stopMovement();
+        int rotationDegree = initDegrees-degrees;
+        rotationDegree = (rotationDegree + 180) % 360 - 180;
+        turn2(0, rotationDegree);
+      }
+      Serial.println(finDistance);
+      printData();
+    }
+    
   }
   stopMovement();
 }
