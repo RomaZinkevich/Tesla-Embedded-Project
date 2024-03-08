@@ -56,9 +56,15 @@ void setup() {
 }
 
 void loop() {
-  int initDegrees;
   analogWrite(Motor_L_pwm_pin, 0);
   analogWrite(Motor_R_pwm_pin, 0);
+  sendToESP();
+  webMode();
+  printData();//Printing all required data to LCD
+}
+
+void sendToESP(){
+  int initDegrees;
   Wire.beginTransmission(CMPS14_address);    
   Wire.write(0x02);
   Wire.endTransmission(false);
@@ -70,25 +76,16 @@ void loop() {
     initDegrees = (heading / 10 + offset) % 360; 
   }
   String lid = "Lid="+String(wallDistance);
+  if (wallDistance<=10) lid = "Lid=Warning!";
   String com = "Com="+String(initDegrees);
   Serial3.println(lid);
-  delay(500);
+  printData();
+  delay(300);
   Serial3.println(com);
-  if (Serial3.available() > 0) {
-    String message = Serial3.readStringUntil('\n');
-    Serial.println("Received from ESP: ");
-    Serial.println(message);
-  }
-  if (Serial.available() > 0) {
-    String message = Serial.readStringUntil('\n');
-    Serial.println("Received from Serial Monitor: ");
-    Serial.println(message);
-  }
-  webMode();
-  printData();//Printing all required data to LCD
 }
 
 void printData(){
+  lcd.clear();
   float readData;
   // for (int i=1; i<3; i++){
   //   readData= EEPROM.read(i);
@@ -106,7 +103,6 @@ void printData(){
     printMeasures();
   }
   delay(200);
-  lcd.clear();
 }
 
 void printDistance(){
@@ -136,8 +132,24 @@ void printMeasures(){
 }
 
 void webMode(){//Mode when car can be driven from webpage
+  bool flag = false;
+  String message;
   if (Serial.available() > 0) {//If some message arrived
-    String message = Serial.readStringUntil('\n');
+    message = Serial.readStringUntil('\n');
+    flag = true;
+  }
+  else if (Serial3.available() > 0) { 
+    message = Serial3.readStringUntil('\n');
+    flag = true;
+  }
+  if (flag==true){
+    Serial.println(message);
+    if (message.indexOf("Move")==0){
+      int pos_s = message.indexOf(":");
+      int stat = message.substring(pos_s + 1).toInt();
+      if (stat >= 0) message = "Forward:"+String(stat);
+      else message = "Backward:"+String(abs(stat));
+    }
     int pos_s = message.indexOf(":");
     //Gets index of Command (Can be [Move, Turn, DIr])
     int forwardcommand = message.indexOf("Forward");
@@ -149,6 +161,7 @@ void webMode(){//Mode when car can be driven from webpage
     int pathcommand = message.indexOf("Path");
     int compcommand = message.indexOf("Comp");
     int calcommand = message.indexOf("Cal");
+    int turncommand = message.indexOf("Turn");
     if(pos_s > -1) {//If ":" was in the message then we have right command
       if (forwardcommand==0){
         int stat = message.substring(pos_s + 1).toInt();//Gets number from the message
@@ -160,6 +173,10 @@ void webMode(){//Mode when car can be driven from webpage
         } else {
           Serial.println("Put proper number 0 - 20");
         }
+      }
+      else if (turncommand==0){
+        int stat = message.substring(pos_s + 1).toInt();
+        turn2(0,stat);
       }
       else if (backwardcommand==0){
         int stat = message.substring(pos_s + 1).toInt();//Gets number from the message
@@ -417,9 +434,11 @@ void turn(int encoderValue, int extraDegrees) {//"Turn" command
 
 void drive(int encoderValue, int distance) {//"Move" command
   int left, right;
+  int speed;
   int initPulsesDist, pulsesDist=0, initDegrees, degrees, heading;
   float initDistance = wallDistance;
   float finDistance = initDistance-distance;
+  int amountOfLookingAround=0;
   totaldistance+=distance;
 
   Wire.beginTransmission(CMPS14_address);    
@@ -433,11 +452,6 @@ void drive(int encoderValue, int distance) {//"Move" command
     initDegrees = (heading / 10 + offset) % 360; 
   }
 
-  Serial.println("Init Degrees:");
-  Serial.print(initDegrees);
-  Serial.println();
-
-
   //Determines direction according to negative or positive value of "distance"
   if (distance < 0) {
     left = 1;
@@ -447,12 +461,38 @@ void drive(int encoderValue, int distance) {//"Move" command
     left = 0;
     right = 0;
   }
+
+  if (wallDistance<=30) speed=100;
+  else speed=200;
+
+  Serial.print("DGR:");
+  Serial.println(initDegrees);
+  while ((wallDistance <= 10 && left==0) && (amountOfLookingAround<6)) {
+    lookaround();
+    amountOfLookingAround+=1;
+    Wire.beginTransmission(CMPS14_address);    
+    Wire.write(0x02);
+    Wire.endTransmission(false);
+    Wire.requestFrom(CMPS14_address, 2, true); 
+    if (Wire.available() >= 2) { 
+      byte highByte = Wire.read();
+      byte lowByte = Wire.read();
+      heading = (highByte << 8) + lowByte;
+      initDegrees = (heading / 10 + offset) % 360; 
+    }
+    finDistance = wallDistance-distance;
+  }
+  bool statement1 = (((wallDistance > finDistance) && left==0) || ((wallDistance < finDistance) && left==1));
+  bool statement2 = (wallDistance > 10 || (wallDistance<=10 && left==1));
+  Serial.print("DGR:");
+  Serial.println(initDegrees);
+
   digitalWrite(Motor_R_dir_pin, right);
   digitalWrite(Motor_L_dir_pin, left);
-  analogWrite(Motor_L_pwm_pin, 130);
-  analogWrite(Motor_R_pwm_pin, 130);
+  analogWrite(Motor_L_pwm_pin, speed);
+  analogWrite(Motor_R_pwm_pin, speed);
 
-  while ((wallDistance != finDistance) && (wallDistance != finDistance+1) && (wallDistance != finDistance-1)){
+  while (statement1 && statement2){
     Wire.beginTransmission(CMPS14_address);    
     Wire.write(0x02);
     Wire.endTransmission(false);
@@ -460,18 +500,12 @@ void drive(int encoderValue, int distance) {//"Move" command
     if (Wire.available() >= 2) { 
       digitalWrite(Motor_R_dir_pin, right);
       digitalWrite(Motor_L_dir_pin, left);
-      analogWrite(Motor_L_pwm_pin, 130);
-      analogWrite(Motor_R_pwm_pin, 130);
+      analogWrite(Motor_L_pwm_pin, speed);
+      analogWrite(Motor_R_pwm_pin, speed);
       byte highByte = Wire.read();
       byte lowByte = Wire.read();
       heading = (highByte << 8) + lowByte;
       degrees = (heading / 10 + offset) % 360; 
-      Serial.println("Degrees: ");
-      Serial.print(degrees);
-      Serial.println();
-      Serial.println("Init Degrees: ");
-      Serial.print(initDegrees);
-      Serial.println();
       if (abs(degrees-initDegrees)>10){
         stopMovement();
         int rotationDegree = initDegrees-degrees;
@@ -481,9 +515,18 @@ void drive(int encoderValue, int distance) {//"Move" command
       Serial.println(finDistance);
       printData();
     }
-    
+    if (wallDistance<=30) speed=100;
+    else speed=200;
+    analogWrite(Motor_L_pwm_pin, speed);
+    analogWrite(Motor_R_pwm_pin, speed);
+    statement1 = ((wallDistance != finDistance) && (wallDistance != finDistance+1) && (wallDistance != finDistance-1));
+    statement2 = (wallDistance > 10 || (wallDistance<=10 && left==1));
   }
   stopMovement();
+}
+
+void lookaround(){
+  turn2(0,-60);
 }
 
 void stopMovement(){//Stops the car
