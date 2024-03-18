@@ -9,6 +9,7 @@
 
 #include "LIDARLite_v4LED.h"
 #include <EEPROM.h>
+#include "DFRobot_TCS34725.h"
 
 LIDARLite_v4LED myLIDAR;
 
@@ -34,6 +35,11 @@ bool isFollowing=false;
 float volume=0;
 float area=0;
 
+int RED, GREEN, BLUE=0;
+
+
+DFRobot_TCS34725 tcs = DFRobot_TCS34725(&Wire, TCS34725_ADDRESS,TCS34725_INTEGRATIONTIME_50MS, TCS34725_GAIN_4X);
+
 void setup() {
   Wire.begin(); //Setup for compass
 
@@ -53,14 +59,43 @@ void setup() {
   
   Serial.begin(9600);
   Serial3.begin(9600);
+  Serial.print("LESGOOOOO");
+
+  while(!tcs.begin())
+  {
+    Serial.println("No TCS34725 found ... check your connections");
+    delay(1000);
+  }
+
 }
 
 void loop() {
   analogWrite(Motor_L_pwm_pin, 0);
   analogWrite(Motor_R_pwm_pin, 0);
+  colorSensing();   
   sendToESP();
   webMode();
   printData();//Printing all required data to LCD
+}
+
+void colorSensing(){
+  uint16_t clear, red, green, blue;
+  tcs.getRGBC(&red, &green, &blue, &clear);
+  // turn off LED
+  tcs.lock();  
+
+  // Figure out some basic hex code for visualization
+  uint32_t sum = clear;
+  float r, g, b;
+  r = red;
+  g = green; 
+  b = blue;
+  r = (float)red / sum * 255;
+  g = (float)green / sum * 255;
+  b = (float)blue / sum * 255;
+  RED=r;
+  GREEN=g;
+  BLUE=b;
 }
 
 void sendToESP(){
@@ -78,9 +113,13 @@ void sendToESP(){
   String lid = "Lid="+String(wallDistance);
   if (wallDistance<=10) lid = "Lid=Warning!";
   String com = "Com="+String(initDegrees);
+  String color = "Col="+String(RED)+";"+String(GREEN)+";"+String(BLUE);
   Serial3.println(lid);
   printData();
-  delay(300);
+  delay(250);
+  Serial3.println(color);
+  printData();
+  delay(250);
   Serial3.println(com);
 }
 
@@ -162,6 +201,7 @@ void webMode(){//Mode when car can be driven from webpage
     int compcommand = message.indexOf("Comp");
     int calcommand = message.indexOf("Cal");
     int turncommand = message.indexOf("Turn");
+    int mazecommand = message.indexOf("Maze");
     if(pos_s > -1) {//If ":" was in the message then we have right command
       if (forwardcommand==0){
         int stat = message.substring(pos_s + 1).toInt();//Gets number from the message
@@ -213,10 +253,35 @@ void webMode(){//Mode when car can be driven from webpage
         int stat = message.substring(pos_s + 1).toInt();
         calibrate(stat);
       }
+      else if (mazecommand==0){
+        maze();
+      }
     }
   }
   else if (isFollowing){
     follow();
+  }
+}
+
+String domColor(){
+  if (RED>GREEN && RED>BLUE)
+    return "red";
+  else if (GREEN > RED && GREEN > BLUE)
+    return "green";
+  else return "blue";
+}
+
+void maze(){
+  String color=domColor();
+  Serial.println(color);
+  while(color!="green"){
+    colorSensing();
+    color=domColor();
+    Serial.print("Blue:");
+    Serial.println(BLUE);
+    mazeDrive();
+    if (color=="red") turn2(0,-10);
+    else if (color=="blue" && BLUE>97) turn2(0,10);
   }
 }
 
@@ -430,6 +495,24 @@ void turn(int encoderValue, int extraDegrees) {//"Turn" command
     }
   }
   
+}
+
+void mazeDrive() {
+  digitalWrite(Motor_R_dir_pin, 0);
+  digitalWrite(Motor_L_dir_pin, 0);
+  analogWrite(Motor_L_pwm_pin, 100);
+  analogWrite(Motor_R_pwm_pin, 100);
+  String color=domColor();
+  while (color !="green" && color!="red" && BLUE<97){
+    Serial.println(color);
+    Serial.println(BLUE);
+    colorSensing();
+    color=domColor();
+    analogWrite(Motor_L_pwm_pin, 100);
+    analogWrite(Motor_R_pwm_pin, 100);
+  }
+  analogWrite(Motor_L_pwm_pin, 0);
+  analogWrite(Motor_R_pwm_pin, 0);
 }
 
 void drive(int encoderValue, int distance) {//"Move" command
